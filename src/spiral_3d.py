@@ -394,7 +394,7 @@ def main():
 
         screen.blit(background, (0, 0))
 
-        # --- Project & depth-sort stars (painter's algorithm) --------------
+       
         projected = []
         for star in stars:
             sx, sy, scale, depth = camera.project(
@@ -404,7 +404,7 @@ def main():
                 projected.append((depth, star, sx, sy, scale))
         projected.sort(key=lambda item: item[0], reverse=True)
 
-        # --- Soft additive glow for a subset of bright/young/core stars ----
+      
         if glow_enabled:
             glow_layer.fill((0, 0, 0, 0))
             for depth, star, sx, sy, scale in projected:
@@ -421,16 +421,14 @@ def main():
                     pygame.draw.circle(glow_layer, color, (int(sx), int(sy)), max(1, int(ring)))
             screen.blit(glow_layer, (0, 0), special_flags=pygame.BLEND_ADD)
 
-        # --- Crisp star cores on top -----------------------------------------
+        
         for depth, star, sx, sy, scale in projected:
             depth_fade = clamp(1.4 - depth / (CAMERA_DISTANCE * 2.2), 0.25, 1.0)
             b = clamp(star.brightness * depth_fade, 0.0, 1.0)
             display_color = tuple(int(v * b) for v in star.color)
             draw_aa_circle(screen, display_color, (sx, sy), star.radius * scale)
 
-        # --- Dust lanes on top: dark, semi-transparent streaks that ------
-        # silhouette against the bright arm behind them, the way real
-        # spiral-galaxy dust lanes read in photographs.
+        
         if dust_enabled and dust_patches:
             dust_layer.fill((0, 0, 0, 0))
             for dust in dust_patches:
@@ -444,7 +442,7 @@ def main():
                     )
             screen.blit(dust_layer, (0, 0))
 
-        # --- HUD ---------------------------------------------------------------
+        
         fps = clock.get_fps()
         hud_lines = [
             f"FPS: {fps:.0f}   Stars: {len(stars)}",
