@@ -40,7 +40,7 @@ AUTO_ROTATE_SPEED = 0.04
 
 BG_TOP_COLOR = (6, 8, 20)
 BG_BOTTOM_COLOR = (0, 0, 2)
-BACKEGROUND_STAR_COUNT = 400
+BACKGROUND_STAR_COUNT = 350
 
 def clamp(value, lo, hi):
     return max(lo, min(hi, value))
@@ -108,7 +108,7 @@ class Star:
         self.orbit_radius = math.hypot(x, z)
         self.orbit_angle = math.atan2(z, x)
 
-        self.orbit_spped = 0.35 / (0.6 + self.orbit_radius / 120.0)
+        self.orbit_speed = 0.35 / (0.6 + self.orbit_radius / 120.0)
 
         self.radius = radius
         self.brightness = brightness
@@ -307,7 +307,7 @@ def draw_aa_circle(surface, color, pos, radius):
 def main():
     pygame.init()
     try:
-        screen =  pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
+        screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
     except pygame.error:
         if "SDL_VIDEODRIVER" not in os.environ:
             os.environ["SDL_VIDEODRIVER"] = "dummy"
@@ -316,19 +316,149 @@ def main():
             screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
         else:
             raise
-        pygame.display.set_caption("Galactic_Model")
-        clock = pygame.time.Clock()
-        font = pygame.font.Font(None, 24)
-    
+    pygame.display.set_caption("Galactic Model")
+    clock = pygame.time.Clock()
+    font = pygame.font.Font(None, 24)
+
+    stars, dust_patches = generate_galaxy(STAR_COUNT)
+    camera = Camera()
+    background = build_background(WINDOW_WIDTH, WINDOW_HEIGHT)
+    glow_layer = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.SRCALPHA)
+    dust_layer = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.SRCALPHA)
+
+    center_x, center_y = WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2
+
     running = True
+    paused = False
+    dragging = False
+    glow_enabled = True
+    dust_enabled = True
+    last_mouse = (0, 0)
+    elapsed_time = 0.0
 
     while running:
+        delta_time = clock.tick(TARGET_FPS) / 1000
+        elapsed_time += delta_time if not paused else 0.0
+
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                running  = False
+                running = False
+
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    running = False
+                elif event.key == pygame.K_SPACE:
+                    paused = not paused
+                elif event.key == pygame.K_r:
+                    camera.reset()
+                elif event.key == pygame.K_g:
+                    glow_enabled = not glow_enabled
+                elif event.key == pygame.K_d:
+                    dust_enabled = not dust_enabled
+
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                if event.button == 1:
+                    dragging = True
+                    last_mouse = event.pos
+                elif event.button == 4:
+                    camera.adjust_zoom(1.1)
+                elif event.button == 5:
+                    camera.adjust_zoom(0.9)
+
+            elif event.type == pygame.MOUSEBUTTONUP:
+                if event.button == 1:
+                    dragging = False
+
+            elif event.type == pygame.MOUSEMOTION:
+                if dragging:
+                    mx, my = event.pos
+                    lx, ly = last_mouse
+                    camera.rotate((mx - lx) * 0.005, (my - ly) * 0.005)
+                    last_mouse = (mx, my)
+
+            elif event.type == pygame.MOUSEWHEEL:
+                camera.adjust_zoom(1.0 + event.y * 0.1)
+
+        if not dragging and not paused:
+            camera.yaw += AUTO_ROTATE_SPEED * delta_time
+
+        for star in stars:
+            if not paused:
+                star.advance_orbit(delta_time)
+            star.update_twinkle(elapsed_time)
+        if not paused:
+            for dust in dust_patches:
+                dust["orbit_angle"] += dust["orbit_speed"] * delta_time
+                dust["x"] = math.cos(dust["orbit_angle"]) * dust["orbit_radius"]
+                dust["z"] = math.sin(dust["orbit_angle"]) * dust["orbit_radius"]
+
+        screen.blit(background, (0, 0))
+
+        # --- Project & depth-sort stars (painter's algorithm) --------------
+        projected = []
+        for star in stars:
+            sx, sy, scale, depth = camera.project(
+                star.x, star.y, star.z, center_x, center_y
+            )
+            if -50 <= sx <= WINDOW_WIDTH + 50 and -50 <= sy <= WINDOW_HEIGHT + 50:
+                projected.append((depth, star, sx, sy, scale))
+        projected.sort(key=lambda item: item[0], reverse=True)
+
+        # --- Soft additive glow for a subset of bright/young/core stars ----
+        if glow_enabled:
+            glow_layer.fill((0, 0, 0, 0))
+            for depth, star, sx, sy, scale in projected:
+                if not star.glow:
+                    continue
+                depth_fade = clamp(1.4 - depth / (CAMERA_DISTANCE * 2.2), 0.15, 1.0)
+                b = star.brightness * depth_fade
+                base_r = max(1.0, star.radius * scale)
+                for ring, alpha_mult in ((base_r * 3.0, 0.07), (base_r * 1.6, 0.16)):
+                    alpha = int(255 * b * alpha_mult)
+                    if alpha <= 0:
+                        continue
+                    color = (*star.color, clamp(alpha, 0, 255))
+                    pygame.draw.circle(glow_layer, color, (int(sx), int(sy)), max(1, int(ring)))
+            screen.blit(glow_layer, (0, 0), special_flags=pygame.BLEND_ADD)
+
+        # --- Crisp star cores on top -----------------------------------------
+        for depth, star, sx, sy, scale in projected:
+            depth_fade = clamp(1.4 - depth / (CAMERA_DISTANCE * 2.2), 0.25, 1.0)
+            b = clamp(star.brightness * depth_fade, 0.0, 1.0)
+            display_color = tuple(int(v * b) for v in star.color)
+            draw_aa_circle(screen, display_color, (sx, sy), star.radius * scale)
+
+        # --- Dust lanes on top: dark, semi-transparent streaks that ------
+        # silhouette against the bright arm behind them, the way real
+        # spiral-galaxy dust lanes read in photographs.
+        if dust_enabled and dust_patches:
+            dust_layer.fill((0, 0, 0, 0))
+            for dust in dust_patches:
+                sx, sy, scale, depth = camera.project(
+                    dust["x"], dust["y"], dust["z"], center_x, center_y
+                )
+                if -60 <= sx <= WINDOW_WIDTH + 60 and -60 <= sy <= WINDOW_HEIGHT + 60:
+                    size = max(2, int(dust["size"] * scale))
+                    pygame.draw.circle(
+                        dust_layer, (35, 16, 12, dust["alpha"]), (int(sx), int(sy)), size
+                    )
+            screen.blit(dust_layer, (0, 0))
+
+        # --- HUD ---------------------------------------------------------------
+        fps = clock.get_fps()
+        hud_lines = [
+            f"FPS: {fps:.0f}   Stars: {len(stars)}",
+            f"{'PAUSED' if paused else 'Rotating'}  (SPACE pause, R reset)",
+            f"Glow: {'on' if glow_enabled else 'off'} (G)   Dust: {'on' if dust_enabled else 'off'} (D)",
+            "Drag: rotate   Wheel: zoom",
+        ]
+        for i, line in enumerate(hud_lines):
+            text_surface = font.render(line, True, (220, 220, 230))
+            screen.blit(text_surface, (15, 15 + i * 22))
         pygame.display.flip()
 
     pygame.quit()
+    sys.exit()
 
 if __name__ == "__main__":
     main()
