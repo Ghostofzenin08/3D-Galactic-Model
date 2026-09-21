@@ -6,6 +6,14 @@ import sys
 import pygame
 
 
+try:
+    import pygame.gfxdraw as gfxdraw
+    HAVE_GFXDRAW = True
+except ImportError:
+    HAVE_GFXDRAW = False
+
+
+
 WINDOW_WIDTH = 1200
 WINDOW_HEIGHT = 800
 TARGET_FPS = 60
@@ -24,6 +32,15 @@ GALAXY_RADIUS = 460
 DISK_SCALE_LENGTH = 150         
 DISK_THICKNESS = 18
 
+
+FOV = 560
+CAMERA_DISTANCE = 1000
+AUTO_ROTATE_SPEED = 0.04
+
+
+BG_TOP_COLOR = (6, 8, 20)
+BG_BOTTOM_COLOR = (0, 0, 2)
+BACKEGROUND_STAR_COUNT = 400
 
 def clamp(value, lo, hi):
     return max(lo, min(hi, value))
@@ -216,6 +233,75 @@ def generate_galaxy(star_count):
     return stars, dust_patches
 
 
+class Camera:
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.yaw = 0.5
+        self.pitch = 1.0     # steep angle so the spiral shape reads clearly
+        self.zoom = 1.0
+
+    def rotate(self, dx, dy):
+        self.yaw += dx
+        self.pitch = clamp(self.pitch + dy, -1.45, 1.45)
+
+    def adjust_zoom(self, amount):
+        self.zoom = clamp(self.zoom * amount, 0.25, 4.0)
+
+    def project(self, x, y, z, center_x, center_y):
+        cos_yaw, sin_yaw = math.cos(self.yaw), math.sin(self.yaw)
+        x1 = x * cos_yaw - z * sin_yaw
+        z1 = x * sin_yaw + z * cos_yaw
+
+        cos_pitch, sin_pitch = math.cos(self.pitch), math.sin(self.pitch)
+        y2 = y * cos_pitch - z1 * sin_pitch
+        z2 = y * sin_pitch + z1 * cos_pitch
+
+        distance = CAMERA_DISTANCE / self.zoom
+        depth = z2 + distance
+        if depth < 1:
+            depth = 1
+
+        scale = FOV / depth
+        screen_x = center_x + x1 * scale
+        screen_y = center_y - y2 * scale
+        return screen_x, screen_y, scale, depth
+
+
+
+def build_background(width, height):
+    surface = pygame.Surface((width, height))
+    for y in range(height):
+        t = y / max(1, height - 1)
+        color = lerp_color(BG_TOP_COLOR, BG_BOTTOM_COLOR, t)
+        pygame.draw.line(surface, color, (0, y), (width, y))
+
+    for _ in range(BACKGROUND_STAR_COUNT):
+        x = random.randint(0, width - 1)
+        y = random.randint(0, height - 1)
+        b = random.uniform(0.2, 0.9)
+        shade = int(180 * b)
+        color = (shade, shade, clamp(shade + 20, 0, 255))
+        r = 1 if random.random() < 0.85 else 2
+        pygame.draw.circle(surface, color, (x, y), r)
+
+    return surface
+
+
+
+def draw_aa_circle(surface, color, pos, radius):
+    x, y = int(pos[0]), int(pos[1])
+    radius = max(1, int(radius))
+    if HAVE_GFXDRAW:
+        try:
+            gfxdraw.filled_circle(surface, x, y, radius, color)
+            if radius > 1:
+                gfxdraw.aacircle(surface, x, y, radius, color)
+            return
+        except Exception:
+            pass
+    pygame.draw.circle(surface, color, (x, y), radius)
 
 
 def main():
